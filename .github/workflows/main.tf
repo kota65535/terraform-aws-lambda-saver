@@ -2,7 +2,7 @@ terraform {
   backend "s3" {
     bucket       = "terraform-backend-561678142736"
     region       = "ap-northeast-1"
-    key          = "terraform-aws-ecs-saver.tfstate"
+    key          = "terraform-aws-lambda-saver.tfstate"
     use_lockfile = true
   }
   required_providers {
@@ -22,65 +22,55 @@ provider "aws" {
   region = "ap-northeast-1"
 }
 
-module "ecs_saver" {
+module "lambda_saver" {
   source = "../../"
 }
 
-resource "aws_ecs_cluster" "main" {
-  name = "test"
-}
-
-resource "aws_iam_role" "ecs" {
-  name               = "ecs-tasks-test"
-  assume_role_policy = data.aws_iam_policy_document.ecs_task_trust_relationship.json
-}
-
-resource "aws_iam_role_policy_attachment" "ecs" {
-  role       = aws_iam_role.ecs.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-}
-
-data "aws_iam_policy_document" "ecs_task_trust_relationship" {
+data "aws_iam_policy_document" "assume_role" {
   statement {
-    actions = ["sts:AssumeRole"]
+    effect = "Allow"
 
     principals {
       type        = "Service"
-      identifiers = ["ecs-tasks.amazonaws.com"]
+      identifiers = ["lambda.amazonaws.com"]
     }
+
+    actions = ["sts:AssumeRole"]
   }
 }
 
-resource "aws_ecs_service" "main" {
-  name            = "test"
-  cluster         = aws_ecs_cluster.main.id
-  task_definition = aws_ecs_task_definition.main.arn
-  desired_count   = 1
-  launch_type     = "FARGATE"
-  network_configuration {
-    subnets          = ["subnet-0abaada26acb8894f"]
-    assign_public_ip = true
-  }
+resource "aws_iam_role" "lambda" {
+  name               = "lambda-test"
+  assume_role_policy = data.aws_iam_policy_document.assume_role.json
+}
+
+resource "aws_lambda_function" "lambda" {
+  filename         = data.archive_file.lambda.output_path
+  function_name    = "test"
+  role             = aws_iam_role.lambda.arn
+  handler          = "index.handler"
+  source_code_hash = data.archive_file.lambda.output_base64sha256
+  runtime          = "nodejs20.x"
+  publish          = true
+
   tags = {
     AutoStartTime = 10
     AutoStopTime  = 11
+    Project       = "test"
   }
 }
 
-resource "aws_ecs_task_definition" "main" {
-  family                   = "test"
-  execution_role_arn       = aws_iam_role.ecs.arn
-  task_role_arn            = aws_iam_role.ecs.arn
-  network_mode             = "awsvpc"
-  requires_compatibilities = ["FARGATE"]
-  cpu                      = 512
-  memory                   = 1024
-  container_definitions = jsonencode([
-    {
-      name      = "ubuntu"
-      image     = "public.ecr.aws/lts/ubuntu:20.04_stable"
-      essential = true
-      command   = ["tail", "-f"]
-    },
-  ])
+data "archive_file" "lambda" {
+  type                    = "zip"
+  source_content_filename = "index.js"
+  source_content          = <<EOT
+exports.handler = async (event) => {
+    console.log("Event: ", event);
+    return {
+        statusCode: 200,
+        body: JSON.stringify('Hello from Lambda!'),
+    };
+};
+EOT
+  output_path             = "${path.module}/lambda/function.zip"
 }

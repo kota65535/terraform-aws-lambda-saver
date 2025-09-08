@@ -17,6 +17,14 @@ logger.setLevel(logging.INFO)
 lambda_client = boto3.client("lambda")
 
 
+class NoPublishedVersionError(Exception):
+    def __init__(self, function=""):
+        self.function = function
+
+    def __str__(self):
+        return f"function {self.function} has no published version"
+
+
 def lambda_handler(event: dict, context: dict):
     logger.info(f"Input: {json.dumps(event)}")
 
@@ -61,31 +69,23 @@ def lambda_handler(event: dict, context: dict):
 
 
 def stop_lambda_function_by_name(function_name: str):
-    res = lambda_client.get_function(FunctionName=function_name)
-    function = res["Configuration"]
-    res = lambda_client.list_tags(Resource=function["FunctionArn"])
-    function["Tags"] = res.get("Tags", {})
-
+    function = get_lambda_function_by_name(function_name)
     stop_lambda_function(function)
 
 
 def start_lambda_function_by_name(function_name: str):
-    res = lambda_client.get_function(FunctionName=function_name)
-    function = res["Configuration"]
-    res = lambda_client.list_tags(Resource=function["FunctionArn"])
-    function["Tags"] = res.get("Tags", {})
-
+    function = get_lambda_function_by_name(function_name)
     start_lambda_function(function)
 
 
 def stop_lambda_functions_by_tags(tags: dict):
-    functions = get_lambda_functions_with_concurrency_by_tag(tags)
+    functions = get_lambda_functions_by_tags(tags)
     for f in functions:
         stop_lambda_function(f)
 
 
 def start_lambda_functions_by_tags(tags: dict):
-    functions = get_lambda_functions_with_concurrency_by_tag(tags)
+    functions = get_lambda_functions_by_tags(tags)
     for f in functions:
         start_lambda_function(f)
 
@@ -94,7 +94,7 @@ def stop_lambda_functions_by_schedule(current_hour: int, current_weekday: int):
     current_hour = str(current_hour)
     current_weekday = str(current_weekday)
 
-    functions = get_lambda_functions_with_concurrency_by_tag({"AutoStopTime": current_hour})
+    functions = get_lambda_functions_by_tags({"AutoStopTime": current_hour})
     # Check day of the week matches
     target_functions = []
     for f in functions:
@@ -117,7 +117,7 @@ def start_lambda_functions_by_schedule(current_hour: int, current_weekday: int):
     current_hour = str(current_hour)
     current_weekday = str(current_weekday)
 
-    functions = get_lambda_functions_with_concurrency_by_tag({"AutoStartTime": current_hour})
+    functions = get_lambda_functions_by_tags({"AutoStartTime": current_hour})
     # Check day of the week matches
     target_functions = []
     for f in functions:
@@ -138,7 +138,7 @@ def start_lambda_functions_by_schedule(current_hour: int, current_weekday: int):
 
 def stop_lambda_function(function):
     stopped_concurrency = int(function["Tags"].get("AutoStopConcurrency", 0))
-    if function["AllocatedProvisionedConcurrentExecutions"] <= stopped_concurrency:
+    if function["RequestedProvisionedConcurrentExecutions"] <= stopped_concurrency:
         # Already stopped
         return
 
@@ -167,7 +167,7 @@ def stop_lambda_function(function):
 
 def start_lambda_function(function):
     requested_concurrency = int(function["Tags"].get("LastRequestedConcurrency", 1))
-    if function["AllocatedProvisionedConcurrentExecutions"] >= requested_concurrency:
+    if function["RequestedProvisionedConcurrentExecutions"] >= requested_concurrency:
         # Already started
         return
 
@@ -182,49 +182,56 @@ def start_lambda_function(function):
     )
 
 
-def get_lambda_functions_with_concurrency_by_tag(tags: dict):
+def get_lambda_function_by_name(name: str):
+    res = lambda_client.get_function(FunctionName=name)
+    function = res["Configuration"]
+
+    # Get tags
+    res = lambda_client.list_tags(Resource=function["FunctionArn"])
+    function["Tags"] = res.get("Tags", {})
+
+    # Get the latest function version
+    res = (
+        lambda_client.get_paginator("list_versions_by_function")
+        .paginate(FunctionName=function["FunctionName"])
+        .build_full_result()
+    )
+    latest_version = res["Versions"][-1]["Version"]
+    function["Version"] = latest_version
+    if latest_version == "$LATEST":
+        raise NoPublishedVersionError(function["FunctionName"])
+
+    # Get provisioned concurrency config
+    try:
+        res = lambda_client.get_provisioned_concurrency_config(
+            FunctionName=function["FunctionName"], Qualifier=latest_version
+        )
+    except lambda_client.exceptions.ProvisionedConcurrencyConfigNotFoundException:
+        res["RequestedProvisionedConcurrentExecutions"] = 0
+        res["AvailableProvisionedConcurrentExecutions"] = 0
+        res["AllocatedProvisionedConcurrentExecutions"] = 0
+    except Exception as e:
+        raise e
+
+    function["RequestedProvisionedConcurrentExecutions"] = res["RequestedProvisionedConcurrentExecutions"]
+    function["AvailableProvisionedConcurrentExecutions"] = res["AvailableProvisionedConcurrentExecutions"]
+    function["AllocatedProvisionedConcurrentExecutions"] = res["AllocatedProvisionedConcurrentExecutions"]
+    return function
+
+
+def get_lambda_functions_by_tags(tags: dict):
     functions = []
     res = lambda_client.get_paginator("list_functions").paginate().build_full_result()
     all_functions = res["Functions"]
     for function in all_functions:
-        # Get function versions
-        res = (
-            lambda_client.get_paginator("list_versions_by_function")
-            .paginate(FunctionName=function["FunctionName"])
-            .build_full_result()
-        )
-        latest_version = res["Versions"][-1]["Version"]
-        if latest_version == "$LATEST":
-            # Skip unpublished functions
-            continue
-
-        function["Version"] = latest_version
-
-        # Get provisioned concurrency config
         try:
-            res = lambda_client.get_provisioned_concurrency_config(
-                FunctionName=function["FunctionName"], Qualifier=latest_version
-            )
-        except lambda_client.exceptions.ProvisionedConcurrencyConfigNotFoundException:
-            res["RequestedProvisionedConcurrentExecutions"] = 0
-            res["AvailableProvisionedConcurrentExecutions"] = 0
-            res["AllocatedProvisionedConcurrentExecutions"] = 0
-
-        function["RequestedProvisionedConcurrentExecutions"] = res["RequestedProvisionedConcurrentExecutions"]
-        function["AvailableProvisionedConcurrentExecutions"] = res["AvailableProvisionedConcurrentExecutions"]
-        function["AllocatedProvisionedConcurrentExecutions"] = res["AllocatedProvisionedConcurrentExecutions"]
-
-        # Get function tags and check if all required tags are present
-        res = lambda_client.list_tags(Resource=function["FunctionArn"])
-        function_tags = res.get("Tags", {})
-        tag_matches = all([function_tags.get(key) == value for key, value in tags.items()])
-        if not tag_matches:
-            # Skip functions without required tags
+            function = get_lambda_function_by_name(function["FunctionName"])
+        except NoPublishedVersionError:
             continue
-
-        function["Tags"] = function_tags
-
-        functions.append(function)
+        # Check if all required tags are present
+        tag_matches = all([function["Tags"].get(key) == value for key, value in tags.items()])
+        if tag_matches:
+            functions.append(function)
 
     return functions
 
