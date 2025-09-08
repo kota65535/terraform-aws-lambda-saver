@@ -23,7 +23,7 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: ./.github/workflows
+        working-directory: lambda
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,5 +32,6 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          working-directory: lambda
       - name: Run test
         run: poetry run pytest

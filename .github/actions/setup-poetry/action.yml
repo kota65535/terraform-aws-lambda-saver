@@ -8,7 +8,10 @@ inputs:
   aws-secret-access-key:
     description: AWS secret access key
     required: true
-
+  working-directory:
+    description: Working directory where to look for the poetry.lock file
+    required: false
+    default: "."
 
 runs:
   using: "composite"
