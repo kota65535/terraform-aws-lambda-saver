@@ -58,6 +58,12 @@ resource "aws_lambda_function" "lambda" {
     AutoStopTime  = 11
     Project       = "test"
   }
+
+  lifecycle {
+    ignore_changes = [
+      tags["LastRequestedConcurrency"]
+    ]
+  }
 }
 
 data "archive_file" "lambda" {
