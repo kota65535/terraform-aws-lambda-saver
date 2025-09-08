@@ -37,11 +37,11 @@ jobs:
 
       - name: Terraform init
         run: terraform init
-        working-directory: .github/workflows
+        working-directory: example
 
       - name: Terraform apply
         run: terraform apply -auto-approve
-        working-directory: .github/workflows
+        working-directory: example
 
       - name: Run poetry install
         run: poetry install
