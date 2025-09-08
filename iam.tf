@@ -25,6 +25,7 @@ data "aws_iam_policy_document" "lambda" {
       "lambda:GetProvisionedConcurrencyConfig",
       "lambda:PutProvisionedConcurrencyConfig",
       "lambda:DeleteProvisionedConcurrencyConfig",
+      "lambda:ListVersionsByFunction"
     ]
   }
 }
