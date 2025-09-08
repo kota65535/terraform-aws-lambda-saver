@@ -1,0 +1,52 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - README.md
+  pull_request:
+
+
+jobs:
+  show-context:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show github context object
+        run: echo $JSON
+        env:
+          JSON: ${{ toJSON(github) }}
+  
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: lambda
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup tools
+        uses: ./.github/actions/setup-tools
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          poetry-working-directory: lambda
+
+      - name: Terraform init
+        run: terraform init
+        working-directory: example
+
+      - name: Terraform apply
+        run: terraform apply -auto-approve
+        working-directory: example
+
+      - name: Run poetry install
+        run: poetry install
+        working-directory: lambda
+
+      - name: Run test
+        run: poetry run pytest
+        working-directory: lambda
