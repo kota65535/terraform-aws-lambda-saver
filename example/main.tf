@@ -1,5 +1,5 @@
 module "lambda_saver" {
-  source = ".."
+  source = "./.."
 
   timezone = "Asia/Tokyo"
 }
